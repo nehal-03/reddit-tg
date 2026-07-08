@@ -306,7 +306,7 @@ def main():
     for sub in SUBREDDITS:
         process_subreddit(sub, state)
         save_state(state)  # save incrementally so one bad subreddit doesn't lose earlier progress
-        delay = 500 + random.uniform(0, 50)  # jitter to avoid looking like a bot
+        delay = 50 + random.uniform(0, 50)  # jitter to avoid looking like a bot
         log.info("Sleeping %.1fs before next subreddit...", delay)
         time.sleep(delay)
 
