@@ -29,8 +29,8 @@ STATE_FILE = "posted.json"        # tracks last posted id per subreddit to avoid
 REQUEST_TIMEOUT = 20
 
 # --- Rate-limit handling knobs (env-overridable) ---
-MIN_SUB_DELAY = float(os.environ.get("MIN_SUB_DELAY", "8"))    # base delay between subreddits (s)
-MAX_SUB_DELAY = float(os.environ.get("MAX_SUB_DELAY", "15"))   # jittered upper bound (s)
+MIN_SUB_DELAY = float(os.environ.get("MIN_SUB_DELAY", "40"))    # base delay between subreddits (s)
+MAX_SUB_DELAY = float(os.environ.get("MAX_SUB_DELAY", "100"))   # jittered upper bound (s)
 MAX_RETRIES = int(os.environ.get("MAX_RETRIES", "5"))          # per-request retry attempts
 BASE_BACKOFF = float(os.environ.get("BASE_BACKOFF", "5"))      # base seconds for exponential backoff
 
@@ -229,6 +229,8 @@ def process_subreddit(sub, state):
         if image_urls:
             media_group = []
             for i, url in enumerate(image_urls[:5]):  # Telegram album cap
+                if i > 0:
+                    time.sleep(random.uniform(1.5, 3.5))  # avoid bursting the image CDN
                 filename = f"temp_img_{sub}_{i}.jpg"
                 if download_image(url, filename):
                     files_to_cleanup.append(filename)
