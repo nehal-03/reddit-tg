@@ -3,7 +3,7 @@ name: Daily Reddit -> Telegram Post
 on:
   schedule:
     # Runs at 09:00 UTC every day. Edit to taste (this is UTC, not your local time).
-    - cron: "0 9 * * *"
+    - cron: "0 18 * * *"
   workflow_dispatch: {}   # lets you trigger it manually from the Actions tab
 
 permissions:
