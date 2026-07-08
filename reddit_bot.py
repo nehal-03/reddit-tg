@@ -3,6 +3,7 @@ import re
 import json
 import time
 import html
+import random
 import logging
 
 import feedparser
@@ -27,6 +28,12 @@ MAX_FILE_SIZE = 48 * 1024 * 1024  # 48 MB Telegram upload ceiling
 STATE_FILE = "posted.json"        # tracks last posted id per subreddit to avoid duplicates
 REQUEST_TIMEOUT = 20
 
+# --- Rate-limit handling knobs (env-overridable) ---
+MIN_SUB_DELAY = float(os.environ.get("MIN_SUB_DELAY", "8"))    # base delay between subreddits (s)
+MAX_SUB_DELAY = float(os.environ.get("MAX_SUB_DELAY", "15"))   # jittered upper bound (s)
+MAX_RETRIES = int(os.environ.get("MAX_RETRIES", "5"))          # per-request retry attempts
+BASE_BACKOFF = float(os.environ.get("BASE_BACKOFF", "5"))      # base seconds for exponential backoff
+
 apihelper.CONNECT_TIMEOUT = 60
 apihelper.READ_TIMEOUT = 60
 
@@ -42,6 +49,10 @@ REDDIT_HEADERS = {
     "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
                   "(KHTML, like Gecko) Chrome/124.0 Safari/537.36"
 }
+
+# Reuse a single session so connections are pooled instead of reopened each call
+session = requests.Session()
+session.headers.update(REDDIT_HEADERS)
 
 
 # --- STATE (dedup so the same "top post of the day" isn't reposted every run) ---
@@ -61,18 +72,74 @@ def save_state(state):
 
 
 # --- HELPERS ---
+def request_with_retry(url, *, stream=False, max_retries=MAX_RETRIES):
+    """
+    GET a URL with exponential backoff + jitter on 429/5xx.
+    Honors the Retry-After header when Reddit sends one.
+    Returns the Response on success, or None if all retries are exhausted.
+    """
+    for attempt in range(1, max_retries + 1):
+        try:
+            resp = session.get(url, stream=stream, timeout=REQUEST_TIMEOUT)
+        except requests.RequestException as e:
+            log.warning("Request error for %s (attempt %d/%d): %s", url, attempt, max_retries, e)
+            resp = None
+
+        if resp is not None and resp.status_code == 200:
+            return resp
+
+        if resp is not None and resp.status_code == 429:
+            retry_after = resp.headers.get("Retry-After")
+            if retry_after:
+                try:
+                    wait = float(retry_after)
+                except ValueError:
+                    wait = BASE_BACKOFF * (2 ** (attempt - 1))
+            else:
+                wait = BASE_BACKOFF * (2 ** (attempt - 1))
+            wait += random.uniform(0, 2)  # jitter to avoid thundering herd
+            log.warning(
+                "429 from %s (attempt %d/%d), backing off %.1fs",
+                url, attempt, max_retries, wait,
+            )
+            time.sleep(wait)
+            continue
+
+        if resp is not None and 500 <= resp.status_code < 600:
+            wait = BASE_BACKOFF * (2 ** (attempt - 1)) + random.uniform(0, 2)
+            log.warning(
+                "%s from %s (attempt %d/%d), retrying in %.1fs",
+                resp.status_code, url, attempt, max_retries, wait,
+            )
+            time.sleep(wait)
+            continue
+
+        if resp is not None:
+            log.warning("Non-retryable status %s for %s", resp.status_code, url)
+            return None
+
+        # request exception path: back off before retrying too
+        wait = BASE_BACKOFF * (2 ** (attempt - 1)) + random.uniform(0, 2)
+        time.sleep(wait)
+
+    log.error("Giving up on %s after %d attempts.", url, max_retries)
+    return None
+
+
 def download_image(url, filename):
+    resp = request_with_retry(url, stream=True)
+    if resp is None:
+        return False
     try:
-        response = requests.get(url, headers=REDDIT_HEADERS, stream=True, timeout=REQUEST_TIMEOUT)
-        if response.status_code == 200:
-            with open(filename, "wb") as f:
-                for chunk in response.iter_content(1024 * 64):
-                    f.write(chunk)
-            return True
-        log.warning("Image download got status %s for %s", response.status_code, url)
-    except requests.RequestException as e:
-        log.warning("Image download failed for %s: %s", url, e)
-    return False
+        with open(filename, "wb") as f:
+            for chunk in resp.iter_content(1024 * 64):
+                f.write(chunk)
+        return True
+    except OSError as e:
+        log.warning("Failed writing image %s: %s", filename, e)
+        return False
+    finally:
+        resp.close()
 
 
 def download_video(url, base_filename):
@@ -85,13 +152,27 @@ def download_video(url, base_filename):
         "quiet": True,
         "no_warnings": True,
     }
-    try:
-        with yt_dlp.YoutubeDL(ydl_opts) as ydl:
-            info = ydl.extract_info(url, download=True)
-            return ydl.prepare_filename(info)
-    except Exception as e:
-        log.info("Video download skipped/failed for %s: %s", url, e)
-        return None
+    last_err = None
+    for attempt in range(1, MAX_RETRIES + 1):
+        try:
+            with yt_dlp.YoutubeDL(ydl_opts) as ydl:
+                info = ydl.extract_info(url, download=True)
+                return ydl.prepare_filename(info)
+        except Exception as e:
+            last_err = e
+            msg = str(e).lower()
+            if "429" in msg or "too many requests" in msg:
+                wait = BASE_BACKOFF * (2 ** (attempt - 1)) + random.uniform(0, 2)
+                log.warning(
+                    "yt-dlp 429 for %s (attempt %d/%d), backing off %.1fs",
+                    url, attempt, MAX_RETRIES, wait,
+                )
+                time.sleep(wait)
+                continue
+            # Non-rate-limit failure: no point retrying
+            break
+    log.info("Video download skipped/failed for %s: %s", url, last_err)
+    return None
 
 
 def cleanup_files(file_list):
@@ -122,8 +203,10 @@ def process_subreddit(sub, state):
 
     try:
         rss_url = f"https://www.reddit.com/r/{sub}/top/.rss?t=day"
-        response = requests.get(rss_url, headers=REDDIT_HEADERS, timeout=REQUEST_TIMEOUT)
-        response.raise_for_status()
+        response = request_with_retry(rss_url)
+        if response is None:
+            log.error("Could not fetch RSS for r/%s after retries, skipping this run.", sub)
+            return
         feed = feedparser.parse(response.content)
 
         if not feed.entries:
@@ -221,7 +304,9 @@ def main():
     for sub in SUBREDDITS:
         process_subreddit(sub, state)
         save_state(state)  # save incrementally so one bad subreddit doesn't lose earlier progress
-        time.sleep(3)  # be gentle with Telegram rate limits
+        delay = random.uniform(MIN_SUB_DELAY, MAX_SUB_DELAY)
+        log.info("Sleeping %.1fs before next subreddit...", delay)
+        time.sleep(delay)
 
 
 if __name__ == "__main__":
