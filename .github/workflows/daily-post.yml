@@ -30,8 +30,10 @@ jobs:
         env:
           TELEGRAM_TOKEN: ${{ secrets.TELEGRAM_TOKEN }}
           GROUP_CHAT_ID: ${{ secrets.GROUP_CHAT_ID }}
+          REDDIT_COOKIES_B64: ${{ secrets.REDDIT_COOKIES_B64 }}
           SUBREDDITS: ${{ vars.SUBREDDITS }}
           SPOILER_MEDIA: ${{ vars.SPOILER_MEDIA }}
+
         run: python reddit_bot.py
 
       - name: Persist dedup state (posted.json)
