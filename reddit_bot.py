@@ -89,7 +89,7 @@ def main():
         title, link = post
         results.append((sub, title, link))
         log.info("r/%s -> %s", sub, title)
-        delay = 20 + random.uniform(0, 50)  # jitter to avoid looking like a bot
+        delay = 50 + random.uniform(0, 50)  # jitter to avoid looking like a bot
         log.info("Sleeping %.1fs before next subreddit...", delay)
         time.sleep(delay)
 
