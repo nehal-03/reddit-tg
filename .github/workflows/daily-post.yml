@@ -2,12 +2,11 @@ name: Daily Reddit -> Telegram Post
 
 on:
   schedule:
-    # Runs at 09:00 UTC every day. Edit to taste (this is UTC, not your local time).
     - cron: "0 18 * * *"
-  workflow_dispatch: {}   # lets you trigger it manually from the Actions tab
+  workflow_dispatch: {}
 
 permissions:
-  contents: write   # needed so the workflow can commit posted.json back to the repo
+  contents: write
 
 jobs:
   post:
@@ -21,15 +20,17 @@ jobs:
         with:
           python-version: "3.11"
 
-      - name: Install dependencies
+      - name: Install Python dependencies
         run: pip install -r requirements.txt
 
       - name: Run bot
         env:
           TELEGRAM_TOKEN: ${{ secrets.TELEGRAM_TOKEN }}
           GROUP_CHAT_ID: ${{ secrets.GROUP_CHAT_ID }}
-          SUBREDDITS: ${{ vars.SUBREDDITS }}         # optional repo "Variable", e.g. "aww,earthporn"
-          SPOILER_MEDIA: ${{ vars.SPOILER_MEDIA }}   # optional, "true" or "false"
+          REDDIT_COOKIES_B64: ${{ secrets.REDDIT_COOKIES_B64 }}
+          SUBREDDITS: ${{ vars.SUBREDDITS }}
+          SPOILER_MEDIA: ${{ vars.SPOILER_MEDIA }}
+
         run: python reddit_bot.py
 
       - name: Persist dedup state (posted.json)
