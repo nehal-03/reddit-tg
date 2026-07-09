@@ -1,5 +1,7 @@
 import os
 import html
+import time
+import random
 import logging
 from urllib.parse import quote
 
@@ -87,6 +89,9 @@ def main():
         title, link = post
         results.append((sub, title, link))
         log.info("r/%s -> %s", sub, title)
+        delay = 50 + random.uniform(0, 50)  # jitter to avoid looking like a bot
+        log.info("Sleeping %.1fs before next subreddit...", delay)
+        time.sleep(delay)
 
     if not results:
         log.warning("No posts fetched from any subreddit, skipping send.")
