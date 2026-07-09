@@ -30,6 +30,7 @@ jobs:
           GROUP_CHAT_ID: ${{ secrets.GROUP_CHAT_ID }}
           SUBREDDITS: ${{ vars.SUBREDDITS }}         # optional repo "Variable", e.g. "aww,earthporn"
           SPOILER_MEDIA: ${{ vars.SPOILER_MEDIA }}   # optional, "true" or "false"
+        run: sudo apt-get update && sudo apt-get install -y ffmpeg
         run: python reddit_bot.py
 
       - name: Persist dedup state (posted.json)
